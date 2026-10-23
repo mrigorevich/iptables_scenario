@@ -1,0 +1,132 @@
+---
+- name: netplans
+  hosts: routers
+  gather_facts: no
+  tasks:
+
+    - name: inetRouter routes
+      ansible.builtin.copy:
+        dest: /etc/netplan/60-routing-fix.yaml
+        owner: root
+        group: root
+        mode: '0640'
+        content: |
+          network:
+            version: 2
+            renderer: networkd
+            ethernets:
+              enp0s3:
+                dhcp4: true
+                dhcp6: false
+              enp0s8:
+                addresses:
+                  - 192.168.255.1/30
+                routes:
+                  - to: 192.168.0.0/16
+                    via: 192.168.255.2
+      when: inventory_hostname == 'inetRouter'
+
+    - name: centralRouter routes
+      ansible.builtin.copy:
+        dest: /etc/netplan/60-routing-fix.yaml
+        owner: root
+        group: root
+        mode: '0640'
+        content: |
+          network:
+            version: 2
+            renderer: networkd
+            ethernets:
+              enp0s8:
+                addresses:
+                  - 192.168.255.2/30
+                routes:
+                  - to: default
+                    via: 192.168.255.1
+              enp0s17:
+                addresses:
+                  - 192.168.255.9/30
+                routes:
+                  - to: 192.168.2.0/24
+                    via: 192.168.255.10
+              enp0s18:
+                addresses:
+                  - 192.168.255.5/30
+                routes:
+                  - to: 192.168.1.0/24
+                    via: 192.168.255.6
+      when: inventory_hostname == 'centralRouter'
+
+    - name: inetRouter2 routes
+      ansible.builtin.copy:
+        dest: /etc/netplan/60-routing-fix.yaml
+        owner: root
+        group: root
+        mode: '0640'
+        content: |
+          network:
+            version: 2
+            renderer: networkd
+            ethernets:
+              enp0s3:
+                dhcp4: true
+                dhcp6: false
+                routes:
+                  - to: default
+                    via: 10.0.2.2
+              enp0s8:
+                addresses:
+                  - 192.168.254.1/30
+      when: inventory_hostname == 'inetRouter2'
+
+- name: netplans servers
+  hosts: servers
+  gather_facts: no
+  tasks:
+
+    - name: centralServer routes
+      ansible.builtin.copy:
+        dest: /etc/netplan/60-routing-fix.yaml
+        owner: root
+        group: root
+        mode: '0640'
+        content: |
+          network:
+            version: 2
+            renderer: networkd
+            ethernets:
+              enp0s8:
+                addresses:
+                  - 192.168.0.2/28
+                routes:
+                  - to: default
+                    via: 192.168.0.1
+      when: inventory_hostname == 'centralServer'
+
+    - name: del Vagrant netplan
+      ansible.builtin.file:
+        path: /etc/netplan/50-vagrant.yaml
+        state: absent
+
+    - name: restart network
+      ansible.builtin.systemd:
+        name: systemd-networkd
+        state: restarted
+
+    - name: netplan apply
+      ansible.builtin.shell: |
+        netplan apply || true
+
+    - name: del dhcp routes servers
+      ansible.builtin.shell: |
+        ip route del default via 10.0.2.2 dev enp0s3 || true
+        ip route del 192.168.0.1 dev enp0s3 || true
+
+    - name: install nginx
+      ansible.builtin.apt:
+        name:
+          - nginx
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: noninteractive

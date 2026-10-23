@@ -1,0 +1,182 @@
+---
+- name: config inetRouter
+  hosts: inetRouter
+  gather_facts: yes
+  tasks:
+
+    - name: ip forward
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: yes
+        state: present
+        reload: yes
+
+    - name: install packets
+      ansible.builtin.apt:
+        name:
+          - iptables-persistent
+          - conntrack
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: config NAT
+      ansible.builtin.iptables:
+        table: nat
+        chain: POSTROUTING
+        out_interface: enp0s3
+        jump: MASQUERADE
+
+    - name: FORWARD policy
+      ansible.builtin.iptables:
+        chain: FORWARD
+        policy: ACCEPT
+
+    - name: established related
+      ansible.builtin.iptables:
+        chain: INPUT
+        ctstate: [ESTABLISHED, RELATED]
+        jump: ACCEPT
+
+    - name: loopback allow
+      ansible.builtin.iptables:
+        chain: INPUT
+        in_interface: lo
+        jump: ACCEPT
+
+    - name: allow SSH ansible
+      ansible.builtin.iptables:
+        chain: INPUT
+        source: "192.168.50.10"
+        protocol: tcp
+        destination_port: "22"
+        ctstate: [NEW]
+        jump: ACCEPT
+
+    - name: allow SSH host
+      ansible.builtin.iptables:
+        chain: INPUT
+        source: "10.0.2.2"
+        protocol: tcp
+        destination_port: "22"
+        ctstate: [NEW]
+        jump: ACCEPT
+
+    - name: knock rules
+      ansible.builtin.shell: |
+        iptables -D INPUT -s 192.168.255.2 -p tcp --dport 7000 -m recent --name KNOCK --set -j DROP 2>/dev/null || true
+        iptables -D INPUT -s 192.168.255.2 -p tcp --dport 22 -m conntrack --ctstate NEW -m recent --name KNOCK --rcheck --seconds 20 -j ACCEPT 2>/dev/null || true
+        iptables -D INPUT -p tcp --dport 22 -j DROP
+        iptables -A INPUT -s 192.168.255.2 -p tcp --dport 7000 -m recent --name KNOCK --set -j DROP
+        iptables -A INPUT -s 192.168.255.2 -p tcp --dport 22 -m conntrack --ctstate NEW -m recent --name KNOCK --rcheck --seconds 20 -j ACCEPT
+        iptables -A INPUT -p tcp --dport 22 -j DROP
+
+    - name: routes
+      ansible.builtin.shell: |
+        ip route del 192.168.0.1 dev enp0s3 || true
+        ip route add 192.168.0.0/16 via 192.168.255.2 || true
+
+    - name: save iptables rules
+      ansible.builtin.shell: netfilter-persistent save
+
+- name: config centralRouter
+  hosts: centralRouter
+  gather_facts: yes
+  tasks:
+
+    - name: ip forward
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: yes
+        state: present
+        reload: yes
+
+    - name: default gw via inetRouter
+      ansible.builtin.shell: |
+        ip route del default
+        ip route add default via 192.168.255.1
+
+    - name: install packets
+      ansible.builtin.apt:
+        name:
+          - iptables-persistent
+          - conntrack
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: save iptables rules
+      ansible.builtin.shell: netfilter-persistent save
+
+- name: config inetRouter2
+  hosts: inetRouter2
+  gather_facts: yes
+  tasks:
+
+    - name: ip forward
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: yes
+        state: present
+        reload: yes
+
+    - name: install packets
+      ansible.builtin.apt:
+        name:
+          - iptables-persistent
+          - conntrack
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: config NAT
+      ansible.builtin.iptables:
+        table: nat
+        chain: POSTROUTING
+        out_interface: enp0s8
+        protocol: tcp
+        destination: '192.168.0.2'
+        destination_port: '80'
+        jump: MASQUERADE
+
+    - name: portforwarding
+      ansible.builtin.iptables:
+        table: nat
+        chain: PREROUTING
+        in_interface: enp0s10
+        protocol: tcp
+        destination_port: '8080'
+        jump: DNAT
+        to_destination: '192.168.0.2:80'
+
+    - name: dFORWARD
+      ansible.builtin.iptables:
+        chain: FORWARD
+        protocol: tcp
+        destination: '192.168.0.2'
+        destination_port: '80'
+        ctstate: NEW,ESTABLISHED,RELATED
+        jump: ACCEPT
+
+    - name: sFORWARD
+      ansible.builtin.iptables:
+        chain: FORWARD
+        protocol: tcp
+        source: '192.168.0.2'
+        source_port: '80'
+        ctstate: ESTABLISHED,RELATED
+        jump: ACCEPT
+
+    - name: routes
+      ansible.builtin.shell: |
+        ip route del 192.168.0.1 dev enp0s3 || true
+        ip route add 192.168.0.0/16 via 192.168.254.2 || true
+
+    - name: save iptables rules
+      ansible.builtin.shell: netfilter-persistent save
